@@ -2430,9 +2430,9 @@ static void processTick(unsigned long long processorNumber)
                         const unsigned int index = random(numberOfEntityPendingTransactionIndices);
 
                         const Transaction* pendingTransaction = ((Transaction*)&entityPendingTransactions[entityPendingTransactionIndices[index] * MAX_TRANSACTION_SIZE]);
-                        ASSERT(pendingTransaction->checkValidity());
                         if (pendingTransaction->tick == system.tick + TICK_TRANSACTIONS_PUBLICATION_OFFSET)
                         {
+                            ASSERT(pendingTransaction->checkValidity());
                             const unsigned int transactionSize = pendingTransaction->totalSize();
                             if (ts.nextTickTransactionOffset + transactionSize <= ts.tickTransactions.storageSpaceCurrentEpoch)
                             {
