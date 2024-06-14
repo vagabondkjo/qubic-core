@@ -25,6 +25,8 @@ template<
 >
 struct ScoreFunction
 {
+    //typedef unsigned short neuron_index_t;
+    typedef int32_t neuron_index_t;
     static constexpr const int inNeuronsCount = numberOfInputNeurons + dataLength;
     static constexpr const int maxNeuronsCount = inNeuronsCount;
     static constexpr const int allParamsCount = dataLength + numberOfInputNeurons + dataLength;
@@ -37,7 +39,7 @@ struct ScoreFunction
 
     struct queueItem {
         short tick;
-        short neuronIdx;
+        neuron_index_t neuronIdx;
     };
     struct queueState {
         char sum0, sum1, sum2, nSum;
@@ -50,20 +52,26 @@ struct ScoreFunction
             char inputAtTick[maxInputDuration + 1][dataLength + numberOfInputNeurons + dataLength];
         } neurons;
         char* inputLength;
-        unsigned short indicePos[maxNeuronsCount][allParamsCount];
-        short bucketPos[maxNeuronsCount][129];
+        neuron_index_t* indicePos;
+        //neuron_index_t indicePos[maxNeuronsCount][allParamsCount];
+        neuron_index_t bucketPos[maxNeuronsCount][129];
         bool isGeneratedBucket[maxNeuronsCount];
         static_assert((allParamsCount) % 8 == 0, "need to check this packed synapse");
 
         alignas(32) char sumBuffer[512];
-        alignas(32) unsigned short indices[512];
+        alignas(32) neuron_index_t indices[512];
         alignas(32) unsigned char modList[512];
 
         queueItem queue[allParamsCount * 2];
         bool isProcessing[allParamsCount * 2];
         queueState state[allParamsCount * 2];
         unsigned char _maxIndexBuffer[allParamsCount * 2][32];
-        short buffer[256];
+        neuron_index_t buffer[256];
+
+        inline neuron_index_t* getIndicePos(const int nrIdx)
+        {
+            return (indicePos + (size_t)nrIdx * (size_t)allParamsCount);
+        }
     } *_computeBuffer;
     static_assert(maxInputDuration <= 256, "Need to regenerate mod num table");
     // _totalModNum[i]: total of divisible numbers of i
@@ -111,16 +119,32 @@ struct ScoreFunction
                 return false;
             }
         }
+
         if (_computeBuffer == nullptr) {
             if (!allocatePool(sizeof(computeBuffer) * solutionBufferCount, (void**)&_computeBuffer))
             {
                 logToConsole(L"Failed to allocate memory for score solution buffer!");
                 return false;
             }
+            for (int i = 0; i < solutionBufferCount; i++) {
+                const size_t size = (size_t)maxNeuronsCount * (size_t)allParamsCount * sizeof(neuron_index_t);
+                if (!allocatePool(size, (void**)&_computeBuffer[i].indicePos))
+                {
+                    logToConsole(L"Failed to allocate memory for score solution buffer!");
+                    return false;
+                }
+            }
         }
+
         for (int i = 0; i < solutionBufferCount; i++) {
             setMem(&_synapses[i], sizeof(synapseStruct), 0);
+
+            auto* ptr = _computeBuffer[i].indicePos;
             setMem(&_computeBuffer[i], sizeof(computeBuffer), 0);
+            const size_t size = (size_t)maxNeuronsCount * (size_t)allParamsCount * sizeof(neuron_index_t);
+            setMem(ptr, size, 0);
+            _computeBuffer[i].indicePos = ptr;
+
             solutionEngineLock[i] = 0;
         }
 #if USE_SCORE_CACHE
@@ -199,7 +223,7 @@ struct ScoreFunction
 
 
     void cacheBucketIndices(const char* synapseLength, computeBuffer& cb, size_t nrIdx) {
-        short* buffer = cb.buffer;
+        neuron_index_t* buffer = cb.buffer;
         synapseLength += nrIdx * allParamsCount;
         for (size_t j = 0; j < allParamsCount; j++) {
             const char len = synapseLength[j];
@@ -211,13 +235,13 @@ struct ScoreFunction
         for (size_t j = 1; j <= 128; j++) {
             buffer[j] = buffer[j - 1] + cb.bucketPos[nrIdx][j - 1];
         }
-        copyMem(cb.bucketPos[nrIdx], buffer, 129 * sizeof(short));
+        copyMem(cb.bucketPos[nrIdx], buffer, 129 * sizeof(neuron_index_t));
 
         for (size_t j = 0; j < allParamsCount; j++) {
             const char len = synapseLength[j];
             if (len == 0 || len == -128) continue;
-            unsigned short sign = (len > 0) ? 1 : 0;
-            cb.indicePos[nrIdx][buffer[abs(len)]++] = (unsigned short)(j << 1) | sign;
+            neuron_index_t sign = (len > 0) ? 1 : 0;
+            cb.getIndicePos(nrIdx)[buffer[abs(len)]++] = (neuron_index_t)(j << 1) | sign;
         }
     }
 
@@ -234,10 +258,10 @@ struct ScoreFunction
     char findTopFromBucket(computeBuffer& cb,
         const int tick,
         const int neuronIdx,
-        const unsigned short* indices,
-        const short* bucket,
+        const neuron_index_t* indices,
+        const neuron_index_t* bucket,
         const unsigned char* modList,
-        unsigned short& outIdx,
+        neuron_index_t& outIdx,
         const int numMods,
         unsigned char* maxIndexBuffer,
         int& currentCount) {
@@ -296,10 +320,10 @@ struct ScoreFunction
         while (size)
         {
             //pop
-            short tick = queue[size - 1].tick;
+            auto tick = queue[size - 1].tick;
             const int numMods = _totalModNum[tick];
             const auto* modList = _modNum[tick];
-            short neuronIdx = queue[size - 1].neuronIdx;
+            auto neuronIdx = queue[size - 1].neuronIdx;
             auto& maxIndexBuffer = _maxIndexBuffer[size - 1];
             auto& sum0 = state[size - 1].sum0;
             auto& sum1 = state[size - 1].sum1;
@@ -324,9 +348,9 @@ struct ScoreFunction
             foundShortcut = false;
             while (1) {
                 int prev = currentTopMaxCount;
-                unsigned short foundPos = -1;
+                neuron_index_t foundPos = -1;
                 char res = findTopFromBucket<neurBefore, isInput>(cb, tick, neuronIdx,
-                    cb.indicePos[neuronIdx - neurBefore],
+                    cb.getIndicePos(neuronIdx - neurBefore),
                     cb.bucketPos[neuronIdx - neurBefore],
                     modList,
                     foundPos,
